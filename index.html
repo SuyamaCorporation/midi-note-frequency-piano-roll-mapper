@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIDI Note Frequency Piano Roll Mapper</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .piano-key { cursor: pointer; }
+  .piano-key:hover { opacity: 0.75; }
+  #piano-scroll { overflow-x: auto; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen p-4">
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-center text-orange-400 mb-1">MIDI Note Frequency Mapper</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">88-key piano · MIDI 0-127 · f = 440 × 2^((n-69)/12)</p>
+
+  <!-- Tuning -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-4 flex flex-wrap gap-4 items-center">
+    <div>
+      <label class="text-xs text-gray-300 block mb-1">A4 Tuning: <span id="tuning-val" class="text-orange-300 font-bold">440</span> Hz</label>
+      <input type="range" id="tuning-slider" min="415" max="466" value="440" class="w-32">
+    </div>
+    <div class="flex gap-2">
+      <button class="tuning-preset text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded" data-hz="415">415 (Baroque)</button>
+      <button class="tuning-preset text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded" data-hz="432">432 Hz</button>
+      <button class="tuning-preset text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded" data-hz="440">440 Hz (Standard)</button>
+      <button class="tuning-preset text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded" data-hz="442">442 Hz (Orch)</button>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-4">
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div>
+        <label class="text-xs text-gray-300 block mb-1" for="search-midi">MIDI Note #</label>
+        <input type="number" id="search-midi" min="0" max="127" placeholder="0-127"
+          class="w-full bg-gray-700 text-white rounded px-2 py-1 text-sm">
+      </div>
+      <div>
+        <label class="text-xs text-gray-300 block mb-1" for="search-freq">Frequency (Hz)</label>
+        <input type="number" id="search-freq" step="0.01" placeholder="e.g. 440.00"
+          class="w-full bg-gray-700 text-white rounded px-2 py-1 text-sm">
+      </div>
+      <div class="flex items-end">
+        <button id="btn-search" class="bg-orange-700 hover:bg-orange-600 px-4 py-1 rounded text-sm w-full">Find</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div id="info-panel" class="bg-gray-800 rounded-xl p-4 mb-4">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+      <div><div class="text-xs text-gray-400">Note Name</div><div id="info-name" class="text-2xl font-bold text-orange-400">A4</div></div>
+      <div><div class="text-xs text-gray-400">MIDI #</div><div id="info-midi" class="text-2xl font-bold text-blue-400">69</div></div>
+      <div><div class="text-xs text-gray-400">Frequency</div><div id="info-freq" class="text-xl font-bold text-green-400">440.00 Hz</div></div>
+      <div><div class="text-xs text-gray-400">Octave</div><div id="info-oct" class="text-2xl font-bold text-purple-400">4</div></div>
+    </div>
+  </div>
+
+  <!-- Piano Roll (SVG) -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-4">
+    <div class="text-xs text-gray-400 mb-2">88 Keys (A0–C8) · Click to select</div>
+    <div id="piano-scroll">
+      <svg id="piano-svg" height="120" style="display:block"></svg>
+    </div>
+  </div>
+
+  <!-- Octave Reference Grid -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-4">
+    <div class="text-xs text-orange-400 font-bold mb-2">Current Octave Note Reference</div>
+    <div id="octave-grid" class="grid grid-cols-12 gap-1 text-xs text-center"></div>
+  </div>
+
+  <!-- Interval Trainer -->
+  <div class="bg-gray-800 rounded-xl p-4">
+    <h2 class="text-sm font-bold text-orange-400 mb-3">Interval Trainer</h2>
+    <div class="flex flex-wrap gap-3 items-end mb-3">
+      <div>
+        <label class="text-xs text-gray-300 block mb-1" for="note1">Note 1 (MIDI)</label>
+        <input type="number" id="note1" min="0" max="127" value="60" class="bg-gray-700 text-white rounded px-2 py-1 text-sm w-20">
+      </div>
+      <div>
+        <label class="text-xs text-gray-300 block mb-1" for="note2">Note 2 (MIDI)</label>
+        <input type="number" id="note2" min="0" max="127" value="67" class="bg-gray-700 text-white rounded px-2 py-1 text-sm w-20">
+      </div>
+      <button id="btn-interval" class="bg-orange-700 hover:bg-orange-600 px-4 py-1 rounded text-sm">Calculate</button>
+    </div>
+    <div id="interval-result" class="text-sm text-gray-300"></div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const NOTE_NAMES_FLAT = ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+// Is black key
+const IS_BLACK = [false,true,false,true,false,false,true,false,true,false,true,false];
+
+const INTERVAL_NAMES = [
+  'Unison (P1)', 'Minor 2nd (m2)', 'Major 2nd (M2)', 'Minor 3rd (m3)',
+  'Major 3rd (M3)', 'Perfect 4th (P4)', 'Tritone (A4/d5)', 'Perfect 5th (P5)',
+  'Minor 6th (m6)', 'Major 6th (M6)', 'Minor 7th (m7)', 'Major 7th (M7)',
+  'Octave (P8)', 'Minor 9th (m9)', 'Major 9th (M9)', 'Minor 10th (m10)',
+  'Major 10th (M10)', 'Perfect 11th (P11)'
+];
+
+const INTERVAL_RATIOS = ['1:1','16:15','9:8','6:5','5:4','4:3','45:32','3:2','8:5','5:3','16:9','15:8','2:1','','9:4','','5:2','8:3'];
+
+let a4Tuning = 440;
+let selectedMidi = 69;
+
+function midiToFreq(midi) {
+  return a4Tuning * Math.pow(2, (midi-69)/12);
+}
+
+function freqToMidi(freq) {
+  return 69 + 12 * Math.log2(freq / a4Tuning);
+}
+
+function midiToName(midi) {
+  const oct = Math.floor(midi/12) - 1;
+  const name = NOTE_NAMES[midi%12];
+  return name + oct;
+}
+
+function midiToOctave(midi) {
+  return Math.floor(midi/12) - 1;
+}
+
+// MIDI 21 (A0) to 108 (C8) = 88 keys
+const MIDI_MIN = 21, MIDI_MAX = 108;
+const WHITE_W = 14, WHITE_H = 80, BLACK_W = 9, BLACK_H = 50;
+
+let pianoSvg = document.getElementById('piano-svg');
+let keyElements = {};
+
+function buildPiano() {
+  // Count white keys
+  let whiteCount = 0;
+  for (let m = MIDI_MIN; m <= MIDI_MAX; m++) {
+    if (!IS_BLACK[m%12]) whiteCount++;
+  }
+  const totalW = whiteCount * WHITE_W;
+  pianoSvg.setAttribute('width', totalW);
+
+  let whiteIdx = 0;
+  const whitePositions = {};
+  // First pass: white keys
+  for (let m = MIDI_MIN; m <= MIDI_MAX; m++) {
+    if (!IS_BLACK[m%12]) {
+      const x = whiteIdx * WHITE_W;
+      whitePositions[m] = x;
+      whiteIdx++;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      rect.setAttribute('x', x);
+      rect.setAttribute('y', 0);
+      rect.setAttribute('width', WHITE_W-1);
+      rect.setAttribute('height', WHITE_H);
+      rect.setAttribute('fill', '#f8f8f8');
+      rect.setAttribute('stroke', '#666');
+      rect.setAttribute('stroke-width', '1');
+      rect.setAttribute('class', 'piano-key');
+      rect.dataset.midi = m;
+      pianoSvg.appendChild(rect);
+      keyElements[m] = rect;
+    }
+  }
+  // Second pass: black keys
+  for (let m = MIDI_MIN; m <= MIDI_MAX; m++) {
+    if (IS_BLACK[m%12]) {
+      // Find white key position to the left
+      const leftWhite = m - 1;
+      if (whitePositions[leftWhite] !== undefined) {
+        const x = whitePositions[leftWhite] + WHITE_W - BLACK_W/2;
+        const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+        rect.setAttribute('x', x);
+        rect.setAttribute('y', 0);
+        rect.setAttribute('width', BLACK_W);
+        rect.setAttribute('height', BLACK_H);
+        rect.setAttribute('fill', '#222');
+        rect.setAttribute('stroke', '#000');
+        rect.setAttribute('class', 'piano-key');
+        rect.dataset.midi = m;
+        pianoSvg.appendChild(rect);
+        keyElements[m] = rect;
+      }
+    }
+  }
+
+  // Label octave marks (C notes)
+  for (let m = MIDI_MIN; m <= MIDI_MAX; m++) {
+    if (m%12 === 0) { // C note
+      const x = whitePositions[m];
+      if (x === undefined) continue;
+      const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+      text.setAttribute('x', x + WHITE_W/2 - 4);
+      text.setAttribute('y', WHITE_H - 4);
+      text.setAttribute('font-size', '8');
+      text.setAttribute('fill', '#888');
+      text.textContent = `C${Math.floor(m/12)-1}`;
+      pianoSvg.appendChild(text);
+    }
+  }
+
+  // Click events
+  pianoSvg.addEventListener('click', e => {
+    const el = e.target.closest('[data-midi]');
+    if (!el) return;
+    selectNote(parseInt(el.dataset.midi));
+  });
+}
+
+function selectNote(midi) {
+  midi = Math.max(MIDI_MIN, Math.min(MIDI_MAX, midi));
+  selectedMidi = midi;
+  updateInfo(midi);
+  highlightKey(midi);
+  updateOctaveGrid(midiToOctave(midi));
+}
+
+function highlightKey(midi) {
+  // Reset all keys
+  Object.entries(keyElements).forEach(([m,el]) => {
+    const isBlack = IS_BLACK[parseInt(m)%12];
+    el.setAttribute('fill', parseInt(m) === midi ? '#f97316' : (isBlack ? '#222' : '#f8f8f8'));
+  });
+}
+
+function updateInfo(midi) {
+  const freq = midiToFreq(midi);
+  document.getElementById('info-name').textContent = midiToName(midi);
+  document.getElementById('info-midi').textContent = midi;
+  document.getElementById('info-freq').textContent = freq.toFixed(2) + ' Hz';
+  document.getElementById('info-oct').textContent = midiToOctave(midi);
+}
+
+function updateOctaveGrid(octave) {
+  const grid = document.getElementById('octave-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 12; i++) {
+    const midi = (octave+1)*12 + i;
+    const isBlack = IS_BLACK[i];
+    const div = document.createElement('div');
+    div.className = `rounded p-1 cursor-pointer ${isBlack ? 'bg-gray-700 text-gray-300' : 'bg-gray-600 text-white'} ${midi === selectedMidi ? 'ring-2 ring-orange-400' : ''}`;
+    div.innerHTML = `<div class="font-bold">${escapeHtml(NOTE_NAMES[i])}${octave}</div><div class="text-gray-400">${escapeHtml(String(midi))}</div><div class="text-orange-300">${midiToFreq(midi).toFixed(1)}</div>`;
+    div.addEventListener('click', () => selectNote(midi));
+    grid.appendChild(div);
+  }
+}
+
+// Search
+document.getElementById('btn-search').addEventListener('click', () => {
+  const midiVal = document.getElementById('search-midi').value;
+  const freqVal = document.getElementById('search-freq').value;
+  if (midiVal !== '') {
+    selectNote(Math.round(parseFloat(midiVal)));
+    scrollToKey(parseInt(midiVal));
+  } else if (freqVal !== '') {
+    const midi = Math.round(freqToMidi(parseFloat(freqVal)));
+    selectNote(midi);
+    scrollToKey(midi);
+  }
+});
+
+function scrollToKey(midi) {
+  const el = keyElements[midi];
+  if (!el) return;
+  const x = parseFloat(el.getAttribute('x'));
+  document.getElementById('piano-scroll').scrollLeft = Math.max(0, x - 100);
+}
+
+// Tuning
+document.getElementById('tuning-slider').addEventListener('input', e => {
+  a4Tuning = parseInt(e.target.value);
+  document.getElementById('tuning-val').textContent = a4Tuning;
+  updateInfo(selectedMidi);
+  updateOctaveGrid(midiToOctave(selectedMidi));
+});
+document.querySelectorAll('.tuning-preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    a4Tuning = parseInt(btn.dataset.hz);
+    document.getElementById('tuning-slider').value = a4Tuning;
+    document.getElementById('tuning-val').textContent = a4Tuning;
+    updateInfo(selectedMidi);
+    updateOctaveGrid(midiToOctave(selectedMidi));
+  });
+});
+
+// Interval trainer
+document.getElementById('btn-interval').addEventListener('click', () => {
+  const n1 = parseInt(document.getElementById('note1').value);
+  const n2 = parseInt(document.getElementById('note2').value);
+  const semitones = Math.abs(n2 - n1);
+  const name = INTERVAL_NAMES[Math.min(semitones, INTERVAL_NAMES.length-1)] || `${semitones} semitones`;
+  const ratio = INTERVAL_RATIOS[Math.min(semitones, INTERVAL_RATIOS.length-1)] || '–';
+  const f1 = midiToFreq(n1), f2 = midiToFreq(n2);
+  const result = document.getElementById('interval-result');
+  result.innerHTML = `
+    <div><span class="text-orange-400 font-bold">${escapeHtml(midiToName(n1))}</span> → <span class="text-blue-400 font-bold">${escapeHtml(midiToName(n2))}</span></div>
+    <div class="mt-1">Interval: <span class="text-green-400 font-bold">${escapeHtml(name)}</span></div>
+    <div class="mt-1 text-gray-400 text-xs">${escapeHtml(semitones.toString())} semitones · Ratio: ${escapeHtml(ratio)} · ${escapeHtml(f1.toFixed(2))} Hz → ${escapeHtml(f2.toFixed(2))} Hz</div>
+  `;
+});
+
+// Init
+buildPiano();
+selectNote(69); // A4
+// Scroll to center
+setTimeout(() => {
+  document.getElementById('piano-scroll').scrollLeft = 200;
+}, 100);
+</script>
+</body>
+</html>
